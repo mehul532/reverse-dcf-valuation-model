@@ -1,5 +1,6 @@
 from reversedcf.data import (
     CompanyValuationInputs,
+    build_data_quality_statuses,
     calculate_net_debt,
     company_inputs_to_dict,
     load_manual_inputs,
@@ -64,3 +65,25 @@ def test_company_inputs_to_dict_converts_dataclass_cleanly():
     assert data["ticker"] == "AAPL"
     assert data["net_debt"] == -50_000_000_000.0
     assert data["source"] == "unit-test"
+
+
+def test_data_quality_status_generation_tracks_estimated_and_missing_fields():
+    statuses = build_data_quality_statuses(
+        current_share_price=190.0,
+        market_cap=2_900_000_000_000.0,
+        enterprise_value=None,
+        current_revenue=391_000_000_000.0,
+        fcf_margin=0.27,
+        net_debt=-50_000_000_000.0,
+        shares_outstanding=15_263_000_000.0,
+        estimated_fields={
+            "net_debt": "estimated as total debt minus cash",
+            "shares_outstanding": "estimated from market cap / share price",
+        },
+    )
+
+    assert statuses["current_share_price"]["status"] == "Loaded"
+    assert statuses["enterprise_value"]["status"] == "Missing / manual input needed"
+    assert statuses["net_debt"]["status"] == "Estimated"
+    assert "total debt minus cash" in statuses["net_debt"]["note"]
+    assert statuses["shares_outstanding"]["status"] == "Estimated"

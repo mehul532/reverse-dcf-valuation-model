@@ -105,6 +105,9 @@ Users can enter or adjust revenue, market enterprise value, net debt, shares
 outstanding, current share price, WACC, terminal growth, and FCF margin. The app
 can solve for market-implied revenue CAGR, FCF margin, WACC, or terminal growth,
 then show the DCF valuation, sensitivity table, and scenario comparison chart.
+After a company is loaded, the app also shows a compact data quality audit,
+historical comparison when statement history is available, and a markdown report
+download built from the current editable assumptions.
 
 ## Sample Outputs
 

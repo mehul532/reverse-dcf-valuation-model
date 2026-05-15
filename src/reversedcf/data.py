@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,10 @@ class CompanyValuationInputs:
     shares_outstanding: float | None
     source: str
     as_of: str | None
+    data_quality: dict[str, dict[str, str]] = field(default_factory=dict)
+    historical_revenues: tuple[float, ...] = ()
+    historical_free_cash_flows: tuple[float, ...] = ()
+    historical_fcf_margins: tuple[float, ...] = ()
 
 
 COMPANY_ALIAS_MAP: dict[str, str] = {
@@ -154,8 +158,10 @@ def load_company_valuation_inputs_from_yfinance(ticker: str) -> CompanyValuation
         market_cap = _first_available_float(fast_info, "market_cap", "marketCap")
 
     shares_outstanding = _first_available_float(info, "sharesOutstanding")
+    shares_estimated = False
     if shares_outstanding is None and market_cap and current_share_price:
         shares_outstanding = market_cap / current_share_price
+        shares_estimated = True
 
     current_revenue = _latest_statement_value(
         financials,
@@ -191,8 +197,10 @@ def load_company_valuation_inputs_from_yfinance(ticker: str) -> CompanyValuation
         free_cash_flow = _first_available_float(info, "freeCashflow", "freeCashFlow")
 
     fcf_margin = None
+    fcf_margin_estimated = False
     if free_cash_flow is not None and current_revenue and current_revenue != 0:
         fcf_margin = free_cash_flow / current_revenue
+        fcf_margin_estimated = True
 
     total_debt = _latest_statement_value(
         balance_sheet,
@@ -213,18 +221,76 @@ def load_company_valuation_inputs_from_yfinance(ticker: str) -> CompanyValuation
         ],
     )
     net_debt = calculate_net_debt(total_debt, cash)
+    net_debt_estimated = net_debt is not None
     if net_debt is None:
         net_debt = _latest_statement_value(balance_sheet, ["Net Debt"])
+        net_debt_estimated = False
 
     enterprise_value = _first_available_float(info, "enterpriseValue")
+    enterprise_value_estimated = False
     if enterprise_value is None and market_cap is not None and net_debt is not None:
         enterprise_value = market_cap + net_debt
+        enterprise_value_estimated = True
 
     company_name = (
         info.get("longName")
         or info.get("shortName")
         or info.get("displayName")
         or resolved_ticker
+    )
+    historical_revenues = _historical_statement_values(
+        financials,
+        [
+            "Total Revenue",
+            "Operating Revenue",
+            "Revenue",
+        ],
+    )
+    historical_operating_cash_flows = _historical_statement_values(
+        cash_flow,
+        [
+            "Operating Cash Flow",
+            "Total Cash From Operating Activities",
+            "Cash Flow From Continuing Operating Activities",
+        ],
+    )
+    historical_capex = _historical_statement_values(
+        cash_flow,
+        [
+            "Capital Expenditure",
+            "Capital Expenditures",
+            "Capital Expenditure Reported",
+        ],
+    )
+    historical_free_cash_flows = _historical_free_cash_flow_values(
+        historical_operating_cash_flows, historical_capex
+    )
+    historical_fcf_margins = _historical_margin_values(
+        historical_free_cash_flows, historical_revenues
+    )
+
+    data_quality = build_data_quality_statuses(
+        current_share_price=current_share_price,
+        market_cap=market_cap,
+        enterprise_value=enterprise_value,
+        current_revenue=current_revenue,
+        fcf_margin=fcf_margin,
+        net_debt=net_debt,
+        shares_outstanding=shares_outstanding,
+        estimated_fields={
+            "enterprise_value": "estimated as market cap + net debt"
+            if enterprise_value_estimated
+            else "",
+            "fcf_margin": "estimated as free cash flow / revenue"
+            if fcf_margin_estimated
+            else "",
+            "net_debt": "estimated as total debt minus cash"
+            if net_debt_estimated
+            else "",
+            "shares_outstanding": "estimated from market cap / share price"
+            if shares_estimated
+            else "",
+        },
     )
 
     return CompanyValuationInputs(
@@ -239,6 +305,10 @@ def load_company_valuation_inputs_from_yfinance(ticker: str) -> CompanyValuation
         shares_outstanding=shares_outstanding,
         source="yfinance",
         as_of=datetime.now(timezone.utc).date().isoformat(),
+        data_quality=data_quality,
+        historical_revenues=tuple(historical_revenues),
+        historical_free_cash_flows=tuple(historical_free_cash_flows),
+        historical_fcf_margins=tuple(historical_fcf_margins),
     )
 
 
@@ -258,6 +328,45 @@ def company_inputs_to_dict(inputs: CompanyValuationInputs) -> dict[str, Any]:
     """Convert company valuation inputs to a plain dictionary."""
 
     return asdict(inputs)
+
+
+def build_data_quality_statuses(
+    *,
+    current_share_price: float | None,
+    market_cap: float | None,
+    enterprise_value: float | None,
+    current_revenue: float | None,
+    fcf_margin: float | None,
+    net_debt: float | None,
+    shares_outstanding: float | None,
+    estimated_fields: dict[str, str] | None = None,
+) -> dict[str, dict[str, str]]:
+    """Build field-level data quality statuses for valuation inputs."""
+
+    values = {
+        "current_share_price": current_share_price,
+        "market_cap": market_cap,
+        "enterprise_value": enterprise_value,
+        "current_revenue": current_revenue,
+        "fcf_margin": fcf_margin,
+        "net_debt": net_debt,
+        "shares_outstanding": shares_outstanding,
+    }
+    estimated_fields = estimated_fields or {}
+    statuses: dict[str, dict[str, str]] = {}
+    for field_name, value in values.items():
+        explanation = estimated_fields.get(field_name, "")
+        if value is None:
+            status = "Missing / manual input needed"
+            note = "Not available from the loaded data."
+        elif explanation:
+            status = "Estimated"
+            note = explanation
+        else:
+            status = "Loaded"
+            note = "Loaded from source data."
+        statuses[field_name] = {"status": status, "note": note}
+    return statuses
 
 
 def get_market_data_yfinance(ticker: str) -> dict[str, Any]:
@@ -469,6 +578,62 @@ def _latest_statement_value(
                 return value
 
     return None
+
+
+def _historical_statement_values(
+    statement: pd.DataFrame, labels: list[str]
+) -> list[float]:
+    if statement.empty:
+        return []
+
+    normalized_labels = {_normalize_statement_label(label) for label in labels}
+    normalized_index = {
+        _normalize_statement_label(str(index)): index for index in statement.index
+    }
+    row = None
+    for label in labels:
+        if label in statement.index:
+            row = statement.loc[label]
+            break
+    if row is None:
+        for normalized in normalized_labels:
+            if normalized in normalized_index:
+                row = statement.loc[normalized_index[normalized]]
+                break
+    if row is None:
+        return []
+    if isinstance(row, pd.DataFrame):
+        row = row.iloc[0]
+    values = [_to_float(value) for value in row.tolist()]
+    clean_values = [value for value in values if value is not None]
+    return list(reversed(clean_values))
+
+
+def _historical_free_cash_flow_values(
+    operating_cash_flows: list[float], capital_expenditures: list[float]
+) -> list[float]:
+    pair_count = min(len(operating_cash_flows), len(capital_expenditures))
+    if pair_count == 0:
+        return []
+    return [
+        operating_cash_flows[-pair_count + index]
+        - abs(capital_expenditures[-pair_count + index])
+        for index in range(pair_count)
+    ]
+
+
+def _historical_margin_values(
+    free_cash_flows: list[float], revenues: list[float]
+) -> list[float]:
+    pair_count = min(len(free_cash_flows), len(revenues))
+    if pair_count == 0:
+        return []
+    margins: list[float] = []
+    for index in range(pair_count):
+        revenue = revenues[-pair_count + index]
+        if revenue:
+            margins.append(free_cash_flows[-pair_count + index] / revenue)
+    return margins
 
 
 def _normalize_statement_label(label: str) -> str:
