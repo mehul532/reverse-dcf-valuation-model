@@ -1,0 +1,12 @@
+numpy
+pandas
+scipy
+matplotlib
+yfinance
+requests
+beautifulsoup4
+streamlit
+typer
+pytest
+jupyter
+ipykernel
