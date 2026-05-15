@@ -1,0 +1,11 @@
+{
+  "ticker": "AAPL",
+  "company_name": "Apple Inc.",
+  "current_share_price": 190.0,
+  "market_cap": 2900000000000,
+  "enterprise_value": 2850000000000,
+  "current_revenue": 391000000000,
+  "fcf_margin": 0.27,
+  "net_debt": -50000000000,
+  "shares_outstanding": 15263000000
+}

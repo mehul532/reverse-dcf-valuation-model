@@ -1,0 +1,11 @@
+{
+  "ticker": "MSFT",
+  "company_name": "Microsoft Corporation",
+  "current_share_price": 420.0,
+  "market_cap": 3120000000000,
+  "enterprise_value": 3080000000000,
+  "current_revenue": 245000000000,
+  "fcf_margin": 0.29,
+  "net_debt": -45000000000,
+  "shares_outstanding": 7430000000
+}

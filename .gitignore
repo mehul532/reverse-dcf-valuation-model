@@ -4,6 +4,8 @@ __pycache__/
 .env
 .ipynb_checkpoints/
 .DS_Store
-data/raw/
-data/processed/
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
 reports/figures/*.html
