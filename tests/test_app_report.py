@@ -48,5 +48,6 @@ def test_build_app_markdown_report_from_app_style_inputs():
     assert "# Example Co (XYZ) Reverse DCF App Report" in report
     assert "Required revenue CAGR: 10.0%" in report
     assert "Data Quality Notes" in report
+    assert "| WACC | 2.0% | 3.0% |" in report
     assert "estimated as market cap + net debt" in report
     assert "not financial advice" in report

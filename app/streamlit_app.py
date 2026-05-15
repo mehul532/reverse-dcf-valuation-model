@@ -452,6 +452,10 @@ def _show_historical_comparison(
         )
         return table
 
+    st.caption(
+        "Historical figures are context for the current assumptions; they are not "
+        "forecasts or investment conclusions."
+    )
     st.dataframe(
         table.style.format(
             {
@@ -678,6 +682,11 @@ def build_app_markdown_report(
     if historical_table is None:
         lines.append("Historical comparison data was not available in this session.")
     else:
+        lines.append(
+            "Historical figures are context for the current assumptions; they are "
+            "not forecasts or investment conclusions."
+        )
+        lines.append("")
         lines.append(_markdown_from_table(historical_table, percent_columns=True))
 
     lines.extend(
@@ -698,13 +707,18 @@ def build_app_markdown_report(
 def _markdown_from_table(table: Any, percent_columns: bool = False) -> str:
     if table is None:
         return "n/a"
+    include_index = bool(getattr(table.index, "name", None))
     columns = [str(column) for column in table.columns]
+    if include_index:
+        columns = [str(table.index.name)] + columns
     lines = [
         "| " + " | ".join(columns) + " |",
         "| " + " | ".join(["---"] * len(columns)) + " |",
     ]
-    for _, row in table.iterrows():
+    for index, row in table.iterrows():
         cells = []
+        if include_index:
+            cells.append(str(index))
         for column in table.columns:
             value = row[column]
             if _is_missing(value):
