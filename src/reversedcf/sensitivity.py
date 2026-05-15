@@ -35,10 +35,14 @@ def sensitivity_table_share_price(
 
     for wacc in wacc_values:
         for terminal_growth in terminal_growth_values:
-            inputs = replace(base_inputs, wacc=wacc, terminal_growth=terminal_growth)
-            table.loc[_percent_label(wacc), _percent_label(terminal_growth)] = (
-                implied_share_price(inputs)
-            )
+            try:
+                inputs = replace(
+                    base_inputs, wacc=wacc, terminal_growth=terminal_growth
+                )
+                value = implied_share_price(inputs)
+            except ValueError:
+                value = float("nan")
+            table.loc[_percent_label(wacc), _percent_label(terminal_growth)] = value
     return table
 
 

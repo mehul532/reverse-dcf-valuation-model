@@ -47,6 +47,9 @@ Equity Value = Enterprise Value - Net Debt
 Implied Share Price = Equity Value / Shares Outstanding
 ```
 
+Net debt is debt minus cash. Negative net debt represents net cash, which
+increases equity value in the bridge from enterprise value to equity value.
+
 Reverse DCF solvers use numerical root finding to identify the assumption that
 makes modeled enterprise value approximately equal the selected market enterprise
 value.

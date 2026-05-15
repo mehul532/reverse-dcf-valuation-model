@@ -66,7 +66,7 @@ def generate_markdown_report(
             f"| Base FCF margin | {format_percent(base_inputs.fcf_margin)} |",
             f"| WACC | {format_percent(base_inputs.wacc)} |",
             f"| Terminal growth | {format_percent(base_inputs.terminal_growth)} |",
-            f"| Net debt | {format_currency(base_inputs.net_debt)} |",
+            f"| Net debt (debt minus cash) | {format_currency(base_inputs.net_debt)} |",
             f"| Shares outstanding | {base_inputs.shares_outstanding:,.0f} |",
             "",
             "## Market-Implied Assumptions",

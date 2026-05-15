@@ -9,7 +9,12 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class DCFInputs:
-    """Assumptions required to run a standard DCF valuation."""
+    """Assumptions required to run a standard DCF valuation.
+
+    Use consistent monetary units across revenue, net debt, enterprise value, and
+    market value inputs. Net debt is debt minus cash; negative net debt means the
+    company has net cash.
+    """
 
     current_revenue: float
     revenue_cagr: float

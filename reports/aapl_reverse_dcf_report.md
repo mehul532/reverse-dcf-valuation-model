@@ -17,7 +17,7 @@ The observed share price used in the analysis is $190.00.
 | Base FCF margin | 27.0% |
 | WACC | 8.0% |
 | Terminal growth | 2.5% |
-| Net debt | -$50.00B |
+| Net debt (debt minus cash) | -$50.00B |
 | Shares outstanding | 15,263,000,000 |
 
 ## Market-Implied Assumptions
