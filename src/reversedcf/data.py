@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import json
+import re
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,238 @@ class ManualInputs:
     fcf_margin: float
     net_debt: float
     shares_outstanding: float
+
+
+@dataclass(frozen=True)
+class CompanyValuationInputs:
+    """Best-effort live company inputs for valuation workflows."""
+
+    ticker: str
+    company_name: str
+    current_share_price: float | None
+    market_cap: float | None
+    enterprise_value: float | None
+    current_revenue: float | None
+    fcf_margin: float | None
+    net_debt: float | None
+    shares_outstanding: float | None
+    source: str
+    as_of: str | None
+
+
+COMPANY_ALIAS_MAP: dict[str, str] = {
+    "apple": "AAPL",
+    "apple inc": "AAPL",
+    "aapl": "AAPL",
+    "microsoft": "MSFT",
+    "microsoft corporation": "MSFT",
+    "msft": "MSFT",
+    "nvidia": "NVDA",
+    "nvidia corporation": "NVDA",
+    "nvda": "NVDA",
+    "alphabet": "GOOGL",
+    "alphabet inc": "GOOGL",
+    "google": "GOOGL",
+    "googl": "GOOGL",
+    "amazon": "AMZN",
+    "amazon com": "AMZN",
+    "amazon.com": "AMZN",
+    "amzn": "AMZN",
+    "meta": "META",
+    "meta platforms": "META",
+    "facebook": "META",
+    "tesla": "TSLA",
+    "tsla": "TSLA",
+    "netflix": "NFLX",
+    "nflx": "NFLX",
+    "berkshire": "BRK-B",
+    "berkshire hathaway": "BRK-B",
+    "brk-b": "BRK-B",
+    "brk.b": "BRK-B",
+    "jpmorgan": "JPM",
+    "jpmorgan chase": "JPM",
+    "jp morgan": "JPM",
+    "jpm": "JPM",
+    "visa": "V",
+    "visa inc": "V",
+    "v": "V",
+    "mastercard": "MA",
+    "mastercard incorporated": "MA",
+    "ma": "MA",
+}
+
+_TICKER_RE = re.compile(r"^[A-Za-z]{1,6}([.-][A-Za-z]{1,2})?$")
+
+
+def resolve_ticker(query: str) -> str:
+    """Resolve a ticker or common company name to a ticker symbol."""
+
+    cleaned = query.strip()
+    if not cleaned:
+        raise ValueError("Enter a ticker or company name.")
+
+    alias_key = _normalize_alias(cleaned)
+    if alias_key in COMPANY_ALIAS_MAP:
+        return COMPANY_ALIAS_MAP[alias_key]
+
+    if _looks_like_ticker(cleaned):
+        return cleaned.upper().replace(".", "-")
+
+    searched = _search_ticker_yfinance(cleaned)
+    if searched:
+        return searched
+
+    raise ValueError(f"Could not resolve {query!r} to a ticker.")
+
+
+def load_company_valuation_inputs(ticker_or_name: str) -> CompanyValuationInputs:
+    """Resolve and load best-effort valuation inputs for a company."""
+
+    ticker = resolve_ticker(ticker_or_name)
+    return load_company_valuation_inputs_from_yfinance(ticker)
+
+
+def load_company_valuation_inputs_from_yfinance(ticker: str) -> CompanyValuationInputs:
+    """Load company valuation inputs from yfinance defensively.
+
+    yfinance statement labels and availability vary by company and over time, so
+    unavailable fields are returned as ``None`` instead of raising.
+    """
+
+    try:
+        import yfinance as yf
+    except ImportError as exc:  # pragma: no cover - dependency guard
+        raise ImportError("Install yfinance to fetch live company data.") from exc
+
+    resolved_ticker = ticker.strip().upper().replace(".", "-")
+    stock = yf.Ticker(resolved_ticker)
+    info = _safe_get_info(stock)
+    fast_info = _safe_get_fast_info(stock)
+    financials = _safe_statement(stock, "financials")
+    cash_flow = _safe_statement(stock, "cashflow")
+    balance_sheet = _safe_statement(stock, "balance_sheet")
+
+    current_share_price = _first_available_float(
+        info,
+        "currentPrice",
+        "regularMarketPrice",
+        "previousClose",
+        "regularMarketPreviousClose",
+    )
+    if current_share_price is None:
+        current_share_price = _first_available_float(
+            fast_info, "last_price", "lastPrice", "regular_market_previous_close"
+        )
+
+    market_cap = _first_available_float(info, "marketCap")
+    if market_cap is None:
+        market_cap = _first_available_float(fast_info, "market_cap", "marketCap")
+
+    shares_outstanding = _first_available_float(info, "sharesOutstanding")
+    if shares_outstanding is None and market_cap and current_share_price:
+        shares_outstanding = market_cap / current_share_price
+
+    current_revenue = _latest_statement_value(
+        financials,
+        [
+            "Total Revenue",
+            "Operating Revenue",
+            "Revenue",
+        ],
+    )
+    if current_revenue is None:
+        current_revenue = _first_available_float(info, "totalRevenue", "revenue")
+
+    operating_cash_flow = _latest_statement_value(
+        cash_flow,
+        [
+            "Operating Cash Flow",
+            "Total Cash From Operating Activities",
+            "Cash Flow From Continuing Operating Activities",
+        ],
+    )
+    capital_expenditures = _latest_statement_value(
+        cash_flow,
+        [
+            "Capital Expenditure",
+            "Capital Expenditures",
+            "Capital Expenditure Reported",
+        ],
+    )
+    free_cash_flow = _calculate_free_cash_flow(
+        operating_cash_flow, capital_expenditures
+    )
+    if free_cash_flow is None:
+        free_cash_flow = _first_available_float(info, "freeCashflow", "freeCashFlow")
+
+    fcf_margin = None
+    if free_cash_flow is not None and current_revenue and current_revenue != 0:
+        fcf_margin = free_cash_flow / current_revenue
+
+    total_debt = _latest_statement_value(
+        balance_sheet,
+        [
+            "Total Debt",
+            "TotalDebt",
+            "Long Term Debt And Capital Lease Obligation",
+            "Long Term Debt",
+        ],
+    )
+    cash = _latest_statement_value(
+        balance_sheet,
+        [
+            "Cash And Cash Equivalents",
+            "Cash Cash Equivalents And Short Term Investments",
+            "Cash And Short Term Investments",
+            "Cash",
+        ],
+    )
+    net_debt = calculate_net_debt(total_debt, cash)
+    if net_debt is None:
+        net_debt = _latest_statement_value(balance_sheet, ["Net Debt"])
+
+    enterprise_value = _first_available_float(info, "enterpriseValue")
+    if enterprise_value is None and market_cap is not None and net_debt is not None:
+        enterprise_value = market_cap + net_debt
+
+    company_name = (
+        info.get("longName")
+        or info.get("shortName")
+        or info.get("displayName")
+        or resolved_ticker
+    )
+
+    return CompanyValuationInputs(
+        ticker=resolved_ticker,
+        company_name=str(company_name),
+        current_share_price=current_share_price,
+        market_cap=market_cap,
+        enterprise_value=enterprise_value,
+        current_revenue=current_revenue,
+        fcf_margin=fcf_margin,
+        net_debt=net_debt,
+        shares_outstanding=shares_outstanding,
+        source="yfinance",
+        as_of=datetime.now(timezone.utc).date().isoformat(),
+    )
+
+
+def calculate_net_debt(
+    total_debt: float | None, cash: float | None
+) -> float | None:
+    """Calculate net debt as total debt minus cash."""
+
+    debt_value = _to_float(total_debt)
+    cash_value = _to_float(cash)
+    if debt_value is None or cash_value is None:
+        return None
+    return debt_value - cash_value
+
+
+def company_inputs_to_dict(inputs: CompanyValuationInputs) -> dict[str, Any]:
+    """Convert company valuation inputs to a plain dictionary."""
+
+    return asdict(inputs)
 
 
 def get_market_data_yfinance(ticker: str) -> dict[str, Any]:
@@ -126,3 +361,170 @@ def save_manual_inputs(inputs: ManualInputs | dict[str, Any], path: str | Path) 
         pd.DataFrame([data]).to_csv(file_path, index=False)
     else:
         raise ValueError("Manual inputs must be saved as .json or .csv.")
+
+
+def _normalize_alias(query: str) -> str:
+    normalized = query.strip().lower().replace("&", "and")
+    normalized = re.sub(r"[^a-z0-9.\-\s]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized.rstrip(".")
+
+
+def _looks_like_ticker(query: str) -> bool:
+    return bool(_TICKER_RE.fullmatch(query.strip()))
+
+
+def _search_ticker_yfinance(query: str) -> str | None:
+    try:
+        import yfinance as yf
+    except ImportError:
+        return None
+
+    try:
+        search_cls = getattr(yf, "Search", None)
+        if search_cls is not None:
+            search = search_cls(query, max_results=1)
+            quotes = getattr(search, "quotes", None) or []
+            if quotes:
+                symbol = quotes[0].get("symbol")
+                if symbol:
+                    return str(symbol).upper().replace(".", "-")
+    except Exception:
+        return None
+
+    return None
+
+
+def _safe_get_info(stock: Any) -> dict[str, Any]:
+    for getter_name in ("get_info",):
+        getter = getattr(stock, getter_name, None)
+        if getter is None:
+            continue
+        try:
+            value = getter()
+            if isinstance(value, dict):
+                return value
+        except Exception:
+            pass
+
+    try:
+        value = getattr(stock, "info", {})
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _safe_get_fast_info(stock: Any) -> dict[str, Any]:
+    try:
+        value = getattr(stock, "fast_info", {})
+        if isinstance(value, dict):
+            return value
+        if hasattr(value, "items"):
+            return dict(value.items())
+    except Exception:
+        return {}
+    return {}
+
+
+def _safe_statement(stock: Any, attribute: str) -> pd.DataFrame:
+    try:
+        value = getattr(stock, attribute)
+        if isinstance(value, pd.DataFrame):
+            return value
+    except Exception:
+        return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def _first_available_float(data: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key in data:
+            value = _to_float(data.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _latest_statement_value(
+    statement: pd.DataFrame, labels: list[str]
+) -> float | None:
+    if statement.empty:
+        return None
+
+    normalized_labels = {_normalize_statement_label(label) for label in labels}
+    normalized_index = {
+        _normalize_statement_label(str(index)): index for index in statement.index
+    }
+
+    for label in labels:
+        if label in statement.index:
+            value = _latest_non_null(statement.loc[label])
+            if value is not None:
+                return value
+
+    for normalized in normalized_labels:
+        if normalized in normalized_index:
+            value = _latest_non_null(statement.loc[normalized_index[normalized]])
+            if value is not None:
+                return value
+
+    return None
+
+
+def _normalize_statement_label(label: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", label.lower())
+
+
+def _latest_non_null(values: Any) -> float | None:
+    if isinstance(values, pd.DataFrame):
+        if values.empty:
+            return None
+        values = values.iloc[0]
+    if isinstance(values, pd.Series):
+        iterable = values.dropna().tolist()
+    elif isinstance(values, (list, tuple)):
+        iterable = values
+    else:
+        iterable = [values]
+
+    for value in iterable:
+        converted = _to_float(value)
+        if converted is not None:
+            return converted
+    return None
+
+
+def _calculate_free_cash_flow(
+    operating_cash_flow: float | None, capital_expenditures: float | None
+) -> float | None:
+    ocf = _to_float(operating_cash_flow)
+    capex = _to_float(capital_expenditures)
+    if ocf is None or capex is None:
+        return None
+    return ocf - abs(capex)
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except Exception:
+            pass
+    if isinstance(value, str):
+        value = value.replace("$", "").replace(",", "").strip()
+        if not value:
+            return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number

@@ -96,10 +96,15 @@ python -m reversedcf.cli generate-report
 streamlit run app/streamlit_app.py
 ```
 
-The dashboard lets users enter revenue, market enterprise value, net debt,
-shares outstanding, WACC, terminal growth, and FCF margin. It can solve for
-market-implied revenue CAGR, FCF margin, WACC, or terminal growth, then show the
-DCF valuation, sensitivity table, and scenario comparison chart.
+The dashboard lets users search by ticker or common company name, then attempts
+to load available market and financial statement data from yfinance. Loaded
+values prefill the sidebar, but every field remains editable because live
+financial data can be incomplete, stale, or labeled inconsistently.
+
+Users can enter or adjust revenue, market enterprise value, net debt, shares
+outstanding, current share price, WACC, terminal growth, and FCF margin. The app
+can solve for market-implied revenue CAGR, FCF margin, WACC, or terminal growth,
+then show the DCF valuation, sensitivity table, and scenario comparison chart.
 
 ## Sample Outputs
 
